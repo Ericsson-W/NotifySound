@@ -2,6 +2,7 @@ package com.example.notifysound
 
 import android.content.Context
 import android.content.ComponentName
+import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -34,12 +35,16 @@ class NotificationListener : NotificationListenerService() {
 
         val soundRes = soundMap[sbn.packageName] ?: return
 
-        cancelNotification(sbn.key)
+        // cancelNotification(sbn.key)  <-- REMOVE THIS LINE
 
         try {
             val mp = MediaPlayer()
-            mp.setAudioStreamType(android.media.AudioManager.STREAM_NOTIFICATION)
-
+            mp.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
             val afd = applicationContext.resources.openRawResourceFd(soundRes)
             mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
             afd.close()
@@ -53,6 +58,15 @@ class NotificationListener : NotificationListenerService() {
         }
     }
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
-        Log.d("NotifySound", "REMOVED: ${sbn.packageName}")
+        Log.d(
+            "NotifySound",
+            """
+        Removed:
+        package=${sbn.packageName}
+        key=${sbn.key}
+        clearable=${sbn.isClearable}
+        ongoing=${sbn.isOngoing}
+        """.trimIndent()
+        )
     }
 }
