@@ -1,7 +1,7 @@
 package com.example.notifysound
 
-import android.content.Context
-import android.content.ComponentName
+import android.app.Notification
+import android.app.Person
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.service.notification.NotificationListenerService
@@ -14,8 +14,20 @@ class NotificationListener : NotificationListenerService() {
         var isConnected = false
     }
 
-    private val soundMap = mapOf(
+    private val defaultSoundMap = mapOf(
         "com.google.android.gm" to R.raw.fahh
+    )
+
+    data class SoundRule(
+        val packageName: String,
+        val identifierMatch: String,
+        val soundResId: Int
+    )
+
+    private val rules = listOf(
+        SoundRule("com.google.android.gm", "wongericsson@gmail.com", R.raw.fahh),
+        SoundRule("com.google.android.gm", "wongericsson01@gmail.com", R.raw.bruh),
+        SoundRule("com.google.android.gm", "ersw0202@gmail.com", R.raw.fornite),
     )
 
     override fun onListenerConnected() {
@@ -30,12 +42,39 @@ class NotificationListener : NotificationListenerService() {
         Log.d("NotifySound", "DISCONNECTED")
     }
 
+    private fun getNotificationIdentifier(sbn: StatusBarNotification): String {
+        val extras = sbn.notification.extras
+        val title = extras.getString(Notification.EXTRA_TITLE) ?: ""
+
+        val peopleList = extras.getParcelableArrayList<Person>(Notification.EXTRA_PEOPLE_LIST)
+        val senderEmail = peopleList?.firstOrNull()?.uri
+            ?.removePrefix("mailto:")
+            ?: ""
+
+        Log.d("NotifySound", "TITLE=$title | SENDER_EMAIL=$senderEmail")
+
+        return if (senderEmail.isNotEmpty()) senderEmail else title
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         Log.e("NotifySound", "RECEIVED: ${sbn.packageName}")
 
-        val soundRes = soundMap[sbn.packageName] ?: return
+        val identifier = getNotificationIdentifier(sbn)
 
-        // cancelNotification(sbn.key)  <-- REMOVE THIS LINE
+        val matchedRule = rules.find {
+            it.packageName == sbn.packageName &&
+                    identifier.equals(it.identifierMatch, ignoreCase = true)
+        }
+
+        val soundRes = matchedRule?.soundResId
+            ?: defaultSoundMap[sbn.packageName]
+            ?: return
+
+        if (matchedRule != null) {
+            Log.d("NotifySound", "MATCHED RULE: ${matchedRule.identifierMatch}")
+        } else {
+            Log.d("NotifySound", "No specific rule matched, using default sound")
+        }
 
         try {
             val mp = MediaPlayer()
@@ -57,16 +96,8 @@ class NotificationListener : NotificationListenerService() {
             Log.e("NotifySound", "Sound failed: ${e.message}")
         }
     }
+
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
-        Log.d(
-            "NotifySound",
-            """
-        Removed:
-        package=${sbn.packageName}
-        key=${sbn.key}
-        clearable=${sbn.isClearable}
-        ongoing=${sbn.isOngoing}
-        """.trimIndent()
-        )
+        Log.d("NotifySound", "REMOVED: ${sbn.packageName}")
     }
 }
