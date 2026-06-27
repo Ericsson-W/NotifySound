@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -22,6 +23,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.notifysound.ui.theme.NotifySoundTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.lifecycle.lifecycleScope
 
 class MainActivity : ComponentActivity() {
 
@@ -51,6 +54,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        lifecycleScope.launch {
+            val dao = AppDatabase.getDatabase(applicationContext).soundRuleDao()
+            dao.insertRule(
+                SoundRule(
+                    packageName = "com.google.android.gm",
+                    identifierMatch = "ersw0202@gmail.com",
+                    soundFileName = "fornite"
+                )
+            )
+            Log.d("NotifySound", "Test rule inserted")
+        }
         enableEdgeToEdge()
         buildUI()
     }
