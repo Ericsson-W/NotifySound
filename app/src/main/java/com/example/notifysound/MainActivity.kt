@@ -8,7 +8,6 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -23,8 +22,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.notifysound.ui.theme.NotifySoundTheme
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import androidx.lifecycle.lifecycleScope
 
 class MainActivity : ComponentActivity() {
 
@@ -33,6 +30,18 @@ class MainActivity : ComponentActivity() {
             contentResolver, "enabled_notification_listeners"
         )
         return flat?.contains(packageName) == true
+    }
+
+    private fun isFirstLaunch(): Boolean {
+        return getSharedPreferences("notifysound_setup", MODE_PRIVATE)
+            .getBoolean("first_launch", true)
+    }
+
+    private fun markFirstLaunchDone() {
+        getSharedPreferences("notifysound_setup", MODE_PRIVATE)
+            .edit()
+            .putBoolean("first_launch", false)
+            .apply()
     }
 
     private fun toggleListener() {
@@ -54,18 +63,33 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        lifecycleScope.launch {
-            val dao = AppDatabase.getDatabase(applicationContext).soundRuleDao()
-            dao.insertRule(
-                SoundRule(
-                    packageName = "com.google.android.gm",
-                    identifierMatch = "ersw0202@gmail.com",
-                    soundFileName = "fornite"
-                )
-            )
-            Log.d("NotifySound", "Test rule inserted")
-        }
         enableEdgeToEdge()
+
+        // Request contacts permission
+        if (checkSelfPermission(android.Manifest.permission.READ_CONTACTS)
+            != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                arrayOf(android.Manifest.permission.READ_CONTACTS), 1002
+            )
+        }
+
+        // Request audio permission
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.READ_MEDIA_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(
+                    arrayOf(android.Manifest.permission.READ_MEDIA_AUDIO), 1003
+                )
+            }
+        } else {
+            if (checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(
+                    arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), 1003
+                )
+            }
+        }
+
         buildUI()
     }
 
@@ -83,8 +107,10 @@ class MainActivity : ComponentActivity() {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     var hasPermission by remember { mutableStateOf(isNotificationAccessGranted()) }
                     var isRunning by remember { mutableStateOf(NotificationListener.isConnected) }
+                    var showProfilesScreen by remember { mutableStateOf(false) }
+                    var showSetupScreen by remember { mutableStateOf(false) }
+                    var showOnboarding by remember { mutableStateOf(isFirstLaunch()) }
 
-                    // Poll every 500ms until connected
                     LaunchedEffect(Unit) {
                         while (!isRunning) {
                             delay(500)
@@ -93,48 +119,114 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(24.dp),
-                        verticalArrangement = Arrangement.Center,
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = when {
-                                !hasPermission -> "❌ Notification Access Required"
-                                !isRunning     -> "⚠️ Granted but reconnecting..."
-                                else           -> "✅ Active and listening"
-                            },
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        if (!hasPermission) {
-                            Button(onClick = {
-                                startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
-                            }) {
-                                Text("Enable Notification Access")
-                            }
-                            Spacer(modifier = Modifier.height(8.dp))
+                    when {
+                        showOnboarding -> {
+                            OnboardingScreen(
+                                hasPermission = hasPermission,
+                                isListenerRunning = isRunning,
+                                onComplete = {
+                                    markFirstLaunchDone()
+                                    showOnboarding = false
+                                    showProfilesScreen = true
+                                }
+                            )
                         }
 
-                        if (hasPermission && !isRunning) {
-                            Button(onClick = {
-                                toggleListener()
-                            }) {
-                                Text("Reconnect Listener")
+                        showSetupScreen -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(
+                                        start = 16.dp,
+                                        end = 16.dp,
+                                        top = 48.dp,
+                                        bottom = 16.dp
+                                    )
+                            ) {
+                                Button(onClick = { showSetupScreen = false }) {
+                                    Text("← Back")
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                SetupScreen(modifier = Modifier.fillMaxSize())
                             }
-                            Spacer(modifier = Modifier.height(8.dp))
                         }
 
-                        Button(onClick = {
-                            val mp = MediaPlayer.create(applicationContext, R.raw.fahh)
-                            mp?.setOnCompletionListener { it.release() }
-                            mp?.start()
-                        }) {
-                            Text("Play Test Sound")
+                        showProfilesScreen -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(
+                                        start = 16.dp,
+                                        end = 16.dp,
+                                        top = 48.dp,
+                                        bottom = 16.dp
+                                    )
+                            ) {
+                                Button(onClick = { showProfilesScreen = false }) {
+                                    Text("← Back")
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                ProfilesScreen(modifier = Modifier.fillMaxSize())
+                            }
+                        }
+
+                        else -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(24.dp),
+                                verticalArrangement = Arrangement.Center,
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = when {
+                                        !hasPermission -> "❌ Notification Access Required"
+                                        !isRunning -> "⚠️ Granted but reconnecting..."
+                                        else -> "✅ Active and listening"
+                                    },
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+
+                                Spacer(modifier = Modifier.height(16.dp))
+
+                                if (!hasPermission) {
+                                    Button(onClick = {
+                                        startActivity(
+                                            Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+                                        )
+                                    }) {
+                                        Text("Enable Notification Access")
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                }
+
+                                if (hasPermission && !isRunning) {
+                                    Button(onClick = { toggleListener() }) {
+                                        Text("Reconnect Listener")
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                }
+
+                                Button(onClick = {
+                                    val mp = MediaPlayer.create(applicationContext, R.raw.fahh)
+                                    mp?.setOnCompletionListener { it.release() }
+                                    mp?.start()
+                                }) {
+                                    Text("Play Test Sound")
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Button(onClick = { showSetupScreen = true }) {
+                                    Text("App Setup")
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Button(onClick = { showProfilesScreen = true }) {
+                                    Text("Manage Profiles")
+                                }
+                            }
                         }
                     }
                 }
@@ -142,3 +234,5 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+//adb shell pm clear com.example.notifysound
