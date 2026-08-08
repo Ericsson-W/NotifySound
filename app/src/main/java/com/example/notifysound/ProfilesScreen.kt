@@ -7,9 +7,11 @@ import android.provider.ContactsContract
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -23,11 +25,18 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.lazy.LazyListState
 import kotlinx.coroutines.launch
-import androidx.compose.foundation.background
-import androidx.compose.runtime.derivedStateOf
+
 val supportedApps = listOf(
     AppOption("Gmail", "com.google.android.gm"),
     AppOption("Instagram", "com.instagram.android"),
@@ -62,6 +71,7 @@ fun resolveSoundRes(fileName: String): Int {
         else -> R.raw.fahh
     }
 }
+
 fun isCustomSound(soundFileName: String): Boolean {
     return soundFileName.startsWith("content://") ||
             soundFileName.startsWith("file://")
@@ -146,6 +156,65 @@ fun resolveContactFromUri(
     return Pair(name, phoneNumber)
 }
 
+// Scrollbar for LazyColumn
+fun Modifier.scrollbar(
+    state: LazyListState,
+    color: Color = Color.Gray.copy(alpha = 0.5f),
+    width: Float = 6f
+): Modifier = this.drawWithContent {
+    drawContent()
+
+    val layoutInfo = state.layoutInfo
+    val totalItems = layoutInfo.totalItemsCount
+    val visibleItems = layoutInfo.visibleItemsInfo
+
+    if (totalItems <= 0 || visibleItems.isEmpty()) return@drawWithContent
+
+    val viewportHeight = (layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset).toFloat()
+    val averageItemSize = visibleItems.sumOf { it.size } / visibleItems.size.toFloat()
+    val estimatedTotalHeight = totalItems * averageItemSize
+
+    // Don't draw scrollbar if all content fits in viewport
+    if (estimatedTotalHeight <= viewportHeight) return@drawWithContent
+
+    val scrollbarHeight = (viewportHeight / estimatedTotalHeight * size.height)
+        .coerceIn(40f, size.height)
+
+    val maxScrollbarOffset = (size.height - scrollbarHeight).coerceAtLeast(0f)
+
+    val scrollOffset = state.firstVisibleItemIndex * averageItemSize +
+            state.firstVisibleItemScrollOffset
+
+    val scrollbarOffset = (scrollOffset / (estimatedTotalHeight - viewportHeight) *
+            maxScrollbarOffset).coerceIn(0f, maxScrollbarOffset)
+
+    drawRoundRect(
+        color = color,
+        topLeft = Offset(size.width - width - 4f, scrollbarOffset),
+        size = Size(width, scrollbarHeight),
+        cornerRadius = CornerRadius(width / 2)
+    )
+}
+
+// Scrollbar for Column (dialogs)
+fun Modifier.scrollbar(
+    state: ScrollState,
+    color: Color = Color.Gray.copy(alpha = 0.5f),
+    width: Float = 6f
+): Modifier = this.drawWithContent {
+    drawContent()
+    if (state.maxValue == 0) return@drawWithContent
+    val scrollbarHeight = (size.height / (size.height + state.maxValue)) * size.height
+    val scrollbarOffset = (state.value.toFloat() / state.maxValue) *
+            (size.height - scrollbarHeight)
+    drawRoundRect(
+        color = color,
+        topLeft = Offset(size.width - width - 4f, scrollbarOffset),
+        size = Size(width, scrollbarHeight),
+        cornerRadius = CornerRadius(width / 2)
+    )
+}
+
 @Composable
 fun ProfilesScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
@@ -154,32 +223,73 @@ fun ProfilesScreen(modifier: Modifier = Modifier) {
     val profiles by dao.getAllContactsFlow().collectAsState(initial = emptyList())
     var showAddProfileDialog by remember { mutableStateOf(false) }
 
+    val listState = rememberLazyListState()
+    val showScrollHint by remember {
+        derivedStateOf { listState.canScrollForward }
+    }
+
     Box(modifier = modifier) {
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
             Text("Profiles", style = MaterialTheme.typography.headlineSmall)
             Spacer(modifier = Modifier.height(8.dp))
+
             if (profiles.isEmpty()) {
                 Text(
                     "No profiles yet. Tap + to add one.",
                     style = MaterialTheme.typography.bodyMedium
                 )
             } else {
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(profiles) { profile ->
-                        ProfileCard(
-                            profile = profile,
-                            dao = dao,
-                            onDelete = {
-                                coroutineScope.launch { dao.deleteContact(profile) }
-                            }
+                Box(modifier = Modifier.weight(1f)) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .scrollbar(listState)
+                    ) {
+                        items(profiles) { profile ->
+                            ProfileCard(
+                                profile = profile,
+                                dao = dao,
+                                onDelete = {
+                                    coroutineScope.launch { dao.deleteContact(profile) }
+                                }
+                            )
+                        }
+                    }
+
+                    if (showScrollHint) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .align(Alignment.BottomCenter)
+                                .background(
+                                    brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                        colors = listOf(
+                                            MaterialTheme.colorScheme.background.copy(alpha = 0f),
+                                            MaterialTheme.colorScheme.background
+                                        )
+                                    )
+                                )
+                        )
+                        Text(
+                            "↓ scroll for more",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 8.dp)
                         )
                     }
                 }
             }
         }
+
         FloatingActionButton(
             onClick = { showAddProfileDialog = true },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(24.dp)
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(24.dp)
         ) {
             Icon(Icons.Default.Add, contentDescription = "Add Profile")
         }
@@ -204,9 +314,10 @@ fun ProfileCard(
     var editingIdentifier by remember { mutableStateOf<ContactIdentifier?>(null) }
     var showEditNameDialog by remember { mutableStateOf(false) }
 
-    // Contact picker — hoisted so it survives dialog recomposition
     var pickedContactName by remember { mutableStateOf("") }
     var pickedContactNumber by remember { mutableStateOf("") }
+    var pickedSoundUri by remember { mutableStateOf("") }
+    var pickedSoundName by remember { mutableStateOf("") }
 
     val contactPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickContact()
@@ -218,15 +329,10 @@ fun ProfileCard(
         }
     }
 
-    // Sound file picker — hoisted so it survives dialog recomposition
-    var pickedSoundUri by remember { mutableStateOf("") }
-    var pickedSoundName by remember { mutableStateOf("") }
-
     val soundPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri?.let {
-            // Persist permission so we can access file later
             context.contentResolver.takePersistableUriPermission(
                 it,
                 android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
@@ -260,7 +366,10 @@ fun ProfileCard(
             }
 
             if (identifiers.isEmpty()) {
-                Text("No app identifiers yet.", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "No app identifiers yet.",
+                    style = MaterialTheme.typography.bodySmall
+                )
             } else {
                 identifiers.forEach { id ->
                     val appLabel = supportedApps.find {
@@ -271,7 +380,9 @@ fun ProfileCard(
                     val soundDisplayName = getDisplayNameForSound(context, id.soundFileName)
 
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -297,8 +408,8 @@ fun ProfileCard(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)  // ← key fix
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 IconButton(
@@ -523,6 +634,7 @@ fun SoundRow(
                 else
                     MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
 
@@ -564,7 +676,6 @@ fun SoundPicker(
     val coroutineScope = rememberCoroutineScope()
     val userSounds by dao.getAllSoundsFlow().collectAsState(initial = emptyList())
 
-    // Auto-add newly picked sound to Room database
     LaunchedEffect(pickedSoundUri) {
         if (pickedSoundUri.isNotEmpty() && pickedSoundName.isNotEmpty()) {
             val existing = dao.getSoundByUri(pickedSoundUri)
@@ -581,7 +692,6 @@ fun SoundPicker(
     }
 
     Column {
-        // Bundled sounds
         Text(
             "Bundled sounds",
             style = MaterialTheme.typography.labelMedium,
@@ -598,7 +708,6 @@ fun SoundPicker(
             )
         }
 
-        // User library sounds from Room
         if (userSounds.isNotEmpty()) {
             Spacer(modifier = Modifier.height(12.dp))
             Text(
@@ -615,9 +724,7 @@ fun SoundPicker(
                     onSelect = { onSoundSelected(userSound.uri) },
                     onPreview = { previewSound(context, userSound.uri) },
                     onDelete = {
-                        coroutineScope.launch {
-                            dao.deleteSound(userSound)
-                        }
+                        coroutineScope.launch { dao.deleteSound(userSound) }
                         if (selectedSound == userSound.uri) {
                             onSoundSelected(bundledSounds.first())
                         }
@@ -687,17 +794,17 @@ fun AddIdentifierDialog(
         text = {
             val scrollState = rememberScrollState()
             val showScrollHint by remember {
-                derivedStateOf { scrollState.canScrollForward }
+                derivedStateOf { scrollState.value < scrollState.maxValue - 10 }
             }
 
             Box {
                 Column(
                     modifier = Modifier
                         .verticalScroll(scrollState)
+                        .scrollbar(scrollState)
                         .padding(bottom = if (showScrollHint) 24.dp else 0.dp)
                 ) {
                     when (step) {
-
                         0 -> {
                             Text(
                                 "Which app is this profile for?",
@@ -884,7 +991,6 @@ fun AddIdentifierDialog(
                     }
                 }
 
-                // Scroll hint
                 if (showScrollHint) {
                     Box(
                         modifier = Modifier
@@ -983,13 +1089,14 @@ fun EditIdentifierDialog(
         text = {
             val scrollState = rememberScrollState()
             val showScrollHint by remember {
-                derivedStateOf { scrollState.canScrollForward }
+                derivedStateOf { scrollState.value < scrollState.maxValue - 10 }
             }
 
             Box {
                 Column(
                     modifier = Modifier
                         .verticalScroll(scrollState)
+                        .scrollbar(scrollState)
                         .padding(bottom = if (showScrollHint) 24.dp else 0.dp)
                 ) {
                     when (step) {
@@ -1113,7 +1220,6 @@ fun EditIdentifierDialog(
                     }
                 }
 
-                // Scroll hint
                 if (showScrollHint) {
                     Box(
                         modifier = Modifier
