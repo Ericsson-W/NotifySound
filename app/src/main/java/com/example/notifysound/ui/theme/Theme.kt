@@ -10,6 +10,8 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material3.Typography
+import com.example.notifysound.AppColorTheme
 
 private val DarkColorScheme = darkColorScheme(
     primary = Purple80,
@@ -52,6 +54,18 @@ fun NotifySoundTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
+        typography = Typography,
+        content = content
+    )
+}
+
+@Composable
+fun NotifySoundTheme(
+    colorTheme: AppColorTheme = AppColorTheme.PURPLE,
+    content: @Composable () -> Unit
+) {
+    MaterialTheme(
+        colorScheme = colorTheme.colorScheme,
         typography = Typography,
         content = content
     )

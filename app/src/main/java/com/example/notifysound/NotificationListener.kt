@@ -1,6 +1,11 @@
 package com.example.notifysound
 
 import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
@@ -15,6 +20,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import androidx.core.app.NotificationCompat
 
 class NotificationListener : NotificationListenerService() {
 
@@ -26,6 +32,8 @@ class NotificationListener : NotificationListenerService() {
         private val lastPlayedBySender = mutableMapOf<String, Long>()
         private const val SENDER_COOLDOWN_MS = 500L
         private var currentPlayer: MediaPlayer? = null
+        private const val CHANNEL_ID = "notifysound_service"
+        private const val FOREGROUND_ID = 1
     }
 
     private val managedApps = setOf(
@@ -42,31 +50,90 @@ class NotificationListener : NotificationListenerService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    // ---- Foreground Service ----
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "NotifySound Service",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Keeps NotifySound running in the background"
+                setShowBadge(false)
+                setSound(null, null)
+            }
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun buildForegroundNotification(): Notification {
+        val intent = Intent(applicationContext, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            applicationContext,
+            0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE
+        )
+
+        return NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+            .setContentTitle("NotifySound is active")
+            .setContentText("Listening for notifications")
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setShowWhen(false)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setAutoCancel(false)        // ← add this
+            .setSilent(true)             // ← add this
+            .build()
+    }
+
+    // ---- Lifecycle ----
+
     override fun onListenerConnected() {
         super.onListenerConnected()
         isConnected = true
         listenerConnectedTime = System.currentTimeMillis()
-        Log.d("NotifySound", "CONNECTED at $listenerConnectedTime")
+        Log.d("NotifySound", "CONNECTED")
+
+        createNotificationChannel()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                FOREGROUND_ID,
+                buildForegroundNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        } else {
+            startForeground(FOREGROUND_ID, buildForegroundNotification())
+        }
     }
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
         isConnected = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
         Log.d("NotifySound", "DISCONNECTED")
     }
+
+    // ---- Audio ----
 
     private fun suppressChannelSound() {
         try {
             val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
             val originalVolume = audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION)
             audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 0, 0)
-            Log.d("NotifySound", "Notification stream muted (was $originalVolume)")
             mainHandler.postDelayed({
                 try {
                     audioManager.setStreamVolume(
                         AudioManager.STREAM_NOTIFICATION, originalVolume, 0
                     )
-                    Log.d("NotifySound", "Notification stream restored to $originalVolume")
                 } catch (e: Exception) {
                     Log.e("NotifySound", "Failed to restore volume: ${e.message}")
                 }
@@ -76,11 +143,102 @@ class NotificationListener : NotificationListenerService() {
         }
     }
 
+    private fun playCustomSound(soundFileName: String) {
+        try {
+            currentPlayer?.let {
+                try { if (it.isPlaying) it.stop(); it.release() } catch (e: Exception) { }
+                currentPlayer = null
+            }
+
+            val mp = MediaPlayer()
+            mp.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
+
+            if (soundFileName.startsWith("content://") ||
+                soundFileName.startsWith("file://")) {
+                mp.setDataSource(applicationContext, android.net.Uri.parse(soundFileName))
+            } else {
+                val afd = applicationContext.resources.openRawResourceFd(
+                    resolveSoundFileName(soundFileName)
+                )
+                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                afd.close()
+            }
+
+            mp.setOnCompletionListener { it.release(); currentPlayer = null }
+            mp.prepare()
+            mp.start()
+            currentPlayer = mp
+            Log.d("NotifySound", "Playing: $soundFileName")
+        } catch (e: Exception) {
+            Log.e("NotifySound", "Sound failed: ${e.message}")
+        }
+    }
+
+    private fun playDefaultNotificationSound() {
+        try {
+            currentPlayer?.let {
+                try { if (it.isPlaying) it.stop(); it.release() } catch (e: Exception) { }
+                currentPlayer = null
+            }
+            val defaultUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val ringtone = RingtoneManager.getRingtone(applicationContext, defaultUri)
+            ringtone.audioAttributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ALARM)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            ringtone.play()
+        } catch (e: Exception) {
+            Log.e("NotifySound", "Default sound failed: ${e.message}")
+        }
+    }
+
+    private fun resolveSoundFileName(fileName: String): Int {
+        return when (fileName) {
+            "fahh" -> R.raw.fahh
+            "bruh" -> R.raw.bruh
+            "fornite" -> R.raw.fornite
+            "phub" -> R.raw.phub
+            "italian_brainrot_rington" -> R.raw.italian_brainrot_ringtone
+            "taco_bell_bond" -> R.raw.taco_bell_bong
+            "bing_chilling" -> R.raw.bing_chilling
+            "lego_breaking" -> R.raw.lego_breaking
+            "bonk" -> R.raw.bonk
+            else -> R.raw.fahh
+        }
+    }
+
+    // ---- Notification Helpers ----
+
     private fun isSummaryNotification(sbn: StatusBarNotification): Boolean {
         val title = sbn.notification.extras.getString(Notification.EXTRA_TITLE) ?: ""
         val summaries = summaryTitles[sbn.packageName] ?: return false
         return title in summaries
     }
+
+    private fun autoVerifySetup(sbn: StatusBarNotification) {
+        val sound = sbn.notification.sound
+        val defaults = sbn.notification.defaults
+        val hasDefaultSound = (defaults and Notification.DEFAULT_SOUND) != 0
+        val isSilent = sound == null && !hasDefaultSound
+
+        if (sbn.packageName == "com.google.android.gm" && isSilent) {
+            val prefs = applicationContext.getSharedPreferences(
+                "notifysound_setup",
+                android.content.Context.MODE_PRIVATE
+            )
+            if (!prefs.getBoolean(sbn.packageName, false)) {
+                prefs.edit().putBoolean(sbn.packageName, true).apply()
+                Log.d("NotifySound", "Auto-verified: ${sbn.packageName}")
+            }
+        }
+    }
+
+    // ---- Sender Extraction ----
 
     private fun getGmailSenderEmail(extras: android.os.Bundle): String {
         return try {
@@ -89,25 +247,18 @@ class NotificationListener : NotificationListenerService() {
                     Notification.EXTRA_PEOPLE_LIST
                 )
                 val uri = people?.firstOrNull()?.uri
-                if (!uri.isNullOrEmpty()) {
-                    return uri.removePrefix("mailto:")
-                }
+                if (!uri.isNullOrEmpty()) return uri.removePrefix("mailto:")
             } else {
                 val people = extras.getParcelableArrayList<android.os.Parcelable>(
                     Notification.EXTRA_PEOPLE_LIST
                 )
                 people?.firstOrNull()?.let { person ->
                     val uri = person.javaClass.getMethod("getUri").invoke(person) as? String
-                    if (!uri.isNullOrEmpty()) {
-                        return uri.removePrefix("mailto:")
-                    }
+                    if (!uri.isNullOrEmpty()) return uri.removePrefix("mailto:")
                 }
             }
             ""
-        } catch (e: Exception) {
-            Log.e("NotifySound", "getGmailSenderEmail failed: ${e.message}")
-            ""
-        }
+        } catch (e: Exception) { "" }
     }
 
     private fun getInstagramSenderId(sbn: StatusBarNotification): String {
@@ -148,10 +299,7 @@ class NotificationListener : NotificationListenerService() {
                 }
             }
             ""
-        } catch (e: Exception) {
-            Log.e("NotifySound", "resolveWhatsAppPhoneNumber failed: ${e.message}")
-            ""
-        }
+        } catch (e: Exception) { "" }
     }
 
     private fun getNotificationIdentifier(sbn: StatusBarNotification): String {
@@ -161,16 +309,9 @@ class NotificationListener : NotificationListenerService() {
         return when (sbn.packageName) {
             "com.google.android.gm" -> {
                 val senderEmail = getGmailSenderEmail(extras)
-                Log.d("NotifySound", "Gmail TITLE=$title | SENDER_EMAIL=$senderEmail")
                 if (senderEmail.isNotEmpty()) senderEmail else title
             }
-
-            "com.instagram.android" -> {
-                val senderId = getInstagramSenderId(sbn)
-                Log.d("NotifySound", "Instagram TITLE=$title | SENDER_ID=$senderId")
-                title
-            }
-
+            "com.instagram.android" -> title
             "com.whatsapp" -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     val peopleList = extras.getParcelableArrayList<android.app.Person>(
@@ -179,28 +320,18 @@ class NotificationListener : NotificationListenerService() {
                     val contactUri = peopleList?.firstOrNull()?.uri ?: ""
                     if (contactUri.isNotEmpty() && contactUri.startsWith("content://")) {
                         val phoneNumber = resolveWhatsAppPhoneNumber(contactUri)
-                        if (phoneNumber.isNotEmpty()) {
-                            Log.d("NotifySound", "WhatsApp TITLE=$title | PHONE=$phoneNumber")
-                            return phoneNumber
-                        }
+                        if (phoneNumber.isNotEmpty()) return phoneNumber
                     }
                 }
-                Log.d("NotifySound", "WhatsApp TITLE=$title | fallback to name")
                 title
             }
-
-            else -> {
-                Log.d("NotifySound", "TITLE=$title")
-                title
-            }
+            else -> title
         }
     }
 
     private fun buildNotifKey(sbn: StatusBarNotification): String {
         return when (sbn.packageName) {
-            "com.instagram.android" -> {
-                "${sbn.key}_${sbn.notification.`when`}"
-            }
+            "com.instagram.android" -> "${sbn.key}_${sbn.notification.`when`}"
             "com.google.android.gm" -> {
                 val extras = sbn.notification.extras
                 val senderEmail = getGmailSenderEmail(extras)
@@ -208,140 +339,23 @@ class NotificationListener : NotificationListenerService() {
                 val identifier = if (senderEmail.isNotEmpty()) senderEmail else title
                 "${sbn.packageName}_$identifier"
             }
-            "com.whatsapp" -> {
-                "${sbn.key}_${sbn.notification.`when`}"
-            }
+            "com.whatsapp" -> "${sbn.key}_${sbn.notification.`when`}"
             else -> sbn.key
         }
     }
 
-    private fun resolveSoundFileName(fileName: String): Int {
-        return when (fileName) {
-            "fahh" -> R.raw.fahh
-            "bruh" -> R.raw.bruh
-            "fornite" -> R.raw.fornite
-            "phub" -> R.raw.phub
-            "italian_brainrot_rington" -> R.raw.italian_brainrot_ringtone
-            "taco_bell_bond" -> R.raw.taco_bell_bong
-            "bing_chilling" -> R.raw.bing_chilling
-            "lego_breaking" -> R.raw.lego_breaking
-            "bonk" -> R.raw.bonk
-            else -> R.raw.fahh
-        }
-    }
-
-    private fun playCustomSound(soundFileName: String) {
-        val soundRes = resolveSoundFileName(soundFileName)
-        try {
-            // Stop any currently playing sound
-            currentPlayer?.let {
-                if (it.isPlaying) it.stop()
-                it.release()
-                currentPlayer = null
-            }
-
-            val mp = MediaPlayer()
-            mp.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ALARM)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
-            )
-
-            if (soundFileName.startsWith("content://") ||
-                soundFileName.startsWith("file://")) {
-                mp.setDataSource(
-                    applicationContext,
-                    android.net.Uri.parse(soundFileName)
-                )
-            } else {
-                val afd = applicationContext.resources.openRawResourceFd(soundRes)
-                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-                afd.close()
-            }
-
-            mp.setOnCompletionListener {
-                it.release()
-                currentPlayer = null
-            }
-            mp.prepare()
-            mp.start()
-            currentPlayer = mp
-            Log.d("NotifySound", "Playing custom sound: $soundFileName")
-        } catch (e: Exception) {
-            Log.e("NotifySound", "Custom sound failed: ${e.message}")
-        }
-    }
-
-    private fun playDefaultNotificationSound() {
-        try {
-            // Stop any currently playing sound
-            currentPlayer?.let {
-                if (it.isPlaying) it.stop()
-                it.release()
-                currentPlayer = null
-            }
-
-            val defaultUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            val ringtone = RingtoneManager.getRingtone(applicationContext, defaultUri)
-            ringtone.audioAttributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ALARM)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-            ringtone.play()
-            Log.d("NotifySound", "Playing system default notification sound")
-        } catch (e: Exception) {
-            Log.e("NotifySound", "Default sound failed: ${e.message}")
-        }
-    }
-
-    private fun autoVerifySetup(sbn: StatusBarNotification) {
-        val sound = sbn.notification.sound
-        val defaults = sbn.notification.defaults
-        val hasDefaultSound = (defaults and Notification.DEFAULT_SOUND) != 0
-        val isSilent = sound == null && !hasDefaultSound
-
-        Log.d("NotifySound", "Auto-verify ${sbn.packageName}: silent=$isSilent sound=$sound defaults=$defaults")
-
-        if (sbn.packageName == "com.google.android.gm" && isSilent) {
-            val prefs = applicationContext.getSharedPreferences(
-                "notifysound_setup",
-                android.content.Context.MODE_PRIVATE
-            )
-            if (!prefs.getBoolean(sbn.packageName, false)) {
-                prefs.edit().putBoolean(sbn.packageName, true).apply()
-                Log.d("NotifySound", "Auto-marked ${sbn.packageName} as configured ✅")
-            }
-        }
-    }
+    // ---- Main Entry Point ----
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        Log.e("NotifySound", "RECEIVED: ${sbn.packageName}")
+        if (!managedApps.contains(sbn.packageName)) return
+        if (sbn.postTime < listenerConnectedTime) return
+        if (isSummaryNotification(sbn)) return
 
-        if (!managedApps.contains(sbn.packageName)) {
-            Log.d("NotifySound", "Unmanaged app — leaving untouched")
-            return
-        }
-
-        if (sbn.postTime < listenerConnectedTime) {
-            Log.d("NotifySound", "Ignoring old notification (pre-connection)")
-            return
-        }
-
-        if (isSummaryNotification(sbn)) {
-            Log.d("NotifySound", "Ignoring summary notification for ${sbn.packageName}")
-            return
-        }
-
-        // Sender cooldown — catches simultaneous duplicate notifications
         val senderCooldownKey = "${sbn.packageName}_${getNotificationIdentifier(sbn)}"
         val now = System.currentTimeMillis()
         synchronized(this) {
             val lastPlayed = lastPlayedBySender[senderCooldownKey] ?: 0L
-            if (now - lastPlayed < SENDER_COOLDOWN_MS) {
-                Log.d("NotifySound", "Sender cooldown active for $senderCooldownKey — skipping")
-                return
-            }
+            if (now - lastPlayed < SENDER_COOLDOWN_MS) return
             lastPlayedBySender[senderCooldownKey] = now
         }
 
@@ -352,13 +366,12 @@ class NotificationListener : NotificationListenerService() {
         val notifKey = buildNotifKey(sbn)
 
         synchronized(this) {
-            if (playedKeys.contains(notifKey)) {
-                Log.d("NotifySound", "Already played sound for $notifKey — skipping")
-                return
-            }
+            if (playedKeys.contains(notifKey)) return
             playedKeys.add(notifKey)
             keyMapping[sbn.key] = notifKey
         }
+
+        Log.d("NotifySound", "RECEIVED: ${sbn.packageName} | $identifier")
 
         serviceScope.launch {
             val dao = AppDatabase.getDatabase(applicationContext).contactDao()
@@ -383,7 +396,6 @@ class NotificationListener : NotificationListenerService() {
 
                     if (byName != null && senderId.isNotEmpty()) {
                         dao.updateIdentifier(byName.copy(instagramSenderId = senderId))
-                        Log.d("NotifySound", "Locked sender_id $senderId for ${byName.identifier}")
                     }
 
                     byId ?: byName
@@ -408,7 +420,7 @@ class NotificationListener : NotificationListenerService() {
                 Log.d("NotifySound", "MATCHED: ${matched.identifier} → ${matched.soundFileName}")
                 playCustomSound(matched.soundFileName)
             } else {
-                Log.d("NotifySound", "No match → playing system default")
+                Log.d("NotifySound", "No match → default sound")
                 playDefaultNotificationSound()
             }
         }
@@ -419,9 +431,6 @@ class NotificationListener : NotificationListenerService() {
             val dedupeKey = keyMapping.remove(sbn.key)
             if (dedupeKey != null) {
                 playedKeys.remove(dedupeKey)
-                Log.d("NotifySound", "REMOVED: cleared dedupeKey $dedupeKey")
-            } else {
-                Log.d("NotifySound", "REMOVED: no mapping found for ${sbn.key}")
             }
         }
     }

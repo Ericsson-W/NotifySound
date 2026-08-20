@@ -7,9 +7,11 @@ import android.provider.ContactsContract
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -33,9 +35,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.ScrollState
-import androidx.compose.foundation.lazy.LazyListState
 import kotlinx.coroutines.launch
+
+// ---- Supported Apps ----
 
 val supportedApps = listOf(
     AppOption("Gmail", "com.google.android.gm"),
@@ -44,6 +46,8 @@ val supportedApps = listOf(
 )
 
 data class AppOption(val label: String, val packageName: String)
+
+// ---- Sounds ----
 
 val bundledSounds = listOf(
     "fahh",
@@ -94,29 +98,63 @@ fun getDisplayNameForSound(context: android.content.Context, soundFileName: Stri
     }
 }
 
-fun previewSound(context: android.content.Context, soundFileName: String) {
-    try {
-        val mp = MediaPlayer()
-        mp.setAudioAttributes(
-            AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ALARM)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-        )
-        if (isCustomSound(soundFileName)) {
-            mp.setDataSource(context, Uri.parse(soundFileName))
-        } else {
-            val afd = context.resources.openRawResourceFd(resolveSoundRes(soundFileName))
-            mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-            afd.close()
+// ---- Singleton Preview Player ----
+
+object PreviewPlayer {
+    private var current: MediaPlayer? = null
+
+    fun play(context: android.content.Context, soundFileName: String) {
+        current?.let {
+            try {
+                if (it.isPlaying) it.stop()
+                it.release()
+            } catch (e: Exception) { }
+            current = null
         }
-        mp.setOnCompletionListener { it.release() }
-        mp.prepare()
-        mp.start()
-    } catch (e: Exception) {
-        e.printStackTrace()
+
+        try {
+            val mp = MediaPlayer()
+            mp.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
+            if (isCustomSound(soundFileName)) {
+                mp.setDataSource(context, Uri.parse(soundFileName))
+            } else {
+                val afd = context.resources.openRawResourceFd(resolveSoundRes(soundFileName))
+                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                afd.close()
+            }
+            mp.setOnCompletionListener {
+                it.release()
+                current = null
+            }
+            mp.prepare()
+            mp.start()
+            current = mp
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun stop() {
+        current?.let {
+            try {
+                if (it.isPlaying) it.stop()
+                it.release()
+            } catch (e: Exception) { }
+            current = null
+        }
     }
 }
+
+fun previewSound(context: android.content.Context, soundFileName: String) {
+    PreviewPlayer.play(context, soundFileName)
+}
+
+// ---- Contact Resolver ----
 
 fun resolveContactFromUri(
     context: android.content.Context,
@@ -156,38 +194,29 @@ fun resolveContactFromUri(
     return Pair(name, phoneNumber)
 }
 
-// Scrollbar for LazyColumn
+// ---- Scrollbar Extensions ----
+
 fun Modifier.scrollbar(
     state: LazyListState,
     color: Color = Color.Gray.copy(alpha = 0.5f),
     width: Float = 6f
 ): Modifier = this.drawWithContent {
     drawContent()
-
     val layoutInfo = state.layoutInfo
     val totalItems = layoutInfo.totalItemsCount
     val visibleItems = layoutInfo.visibleItemsInfo
-
     if (totalItems <= 0 || visibleItems.isEmpty()) return@drawWithContent
-
     val viewportHeight = (layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset).toFloat()
     val averageItemSize = visibleItems.sumOf { it.size } / visibleItems.size.toFloat()
     val estimatedTotalHeight = totalItems * averageItemSize
-
-    // Don't draw scrollbar if all content fits in viewport
     if (estimatedTotalHeight <= viewportHeight) return@drawWithContent
-
     val scrollbarHeight = (viewportHeight / estimatedTotalHeight * size.height)
         .coerceIn(40f, size.height)
-
     val maxScrollbarOffset = (size.height - scrollbarHeight).coerceAtLeast(0f)
-
     val scrollOffset = state.firstVisibleItemIndex * averageItemSize +
             state.firstVisibleItemScrollOffset
-
     val scrollbarOffset = (scrollOffset / (estimatedTotalHeight - viewportHeight) *
             maxScrollbarOffset).coerceIn(0f, maxScrollbarOffset)
-
     drawRoundRect(
         color = color,
         topLeft = Offset(size.width - width - 4f, scrollbarOffset),
@@ -196,7 +225,6 @@ fun Modifier.scrollbar(
     )
 }
 
-// Scrollbar for Column (dialogs)
 fun Modifier.scrollbar(
     state: ScrollState,
     color: Color = Color.Gray.copy(alpha = 0.5f),
@@ -214,6 +242,8 @@ fun Modifier.scrollbar(
         cornerRadius = CornerRadius(width / 2)
     )
 }
+
+// ---- Profiles Screen ----
 
 @Composable
 fun ProfilesScreen(modifier: Modifier = Modifier) {
@@ -299,6 +329,8 @@ fun ProfilesScreen(modifier: Modifier = Modifier) {
         AddProfileDialog(dao = dao, onDismiss = { showAddProfileDialog = false })
     }
 }
+
+// ---- Profile Card ----
 
 @Composable
 fun ProfileCard(
@@ -389,7 +421,9 @@ fun ProfileCard(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 "$appLabel: $displayText",
-                                style = MaterialTheme.typography.bodyMedium
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             if (id.packageName == "com.whatsapp" &&
                                 id.displayLabel.isNotEmpty()) {
@@ -476,6 +510,7 @@ fun ProfileCard(
                 pickedSoundName = ""
             },
             onDismiss = {
+                PreviewPlayer.stop()
                 showAddIdentifierDialog = false
                 pickedContactName = ""
                 pickedContactNumber = ""
@@ -512,6 +547,7 @@ fun ProfileCard(
                 pickedSoundName = ""
             },
             onDismiss = {
+                PreviewPlayer.stop()
                 editingIdentifier = null
                 pickedContactName = ""
                 pickedContactNumber = ""
@@ -529,6 +565,8 @@ fun ProfileCard(
         )
     }
 }
+
+// ---- Dialogs ----
 
 @Composable
 fun EditProfileNameDialog(profile: Contact, dao: ContactDao, onDismiss: () -> Unit) {
@@ -596,6 +634,8 @@ fun AddProfileDialog(dao: ContactDao, onDismiss: () -> Unit) {
     )
 }
 
+// ---- Sound Row ----
+
 @Composable
 fun SoundRow(
     label: String,
@@ -625,7 +665,6 @@ fun SoundRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             RadioButton(selected = isSelected, onClick = onSelect)
-
             Text(
                 label,
                 style = MaterialTheme.typography.bodyLarge,
@@ -633,11 +672,10 @@ fun SoundRow(
                     MaterialTheme.colorScheme.onPrimaryContainer
                 else
                     MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
-
             IconButton(onClick = onPreview) {
                 Icon(
                     Icons.Default.PlayArrow,
@@ -648,7 +686,6 @@ fun SoundRow(
                         MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-
             if (onDelete != null) {
                 IconButton(onClick = onDelete) {
                     Icon(
@@ -661,6 +698,8 @@ fun SoundRow(
         }
     }
 }
+
+// ---- Sound Picker ----
 
 @Composable
 fun SoundPicker(
@@ -680,12 +719,7 @@ fun SoundPicker(
         if (pickedSoundUri.isNotEmpty() && pickedSoundName.isNotEmpty()) {
             val existing = dao.getSoundByUri(pickedSoundUri)
             if (existing == null) {
-                dao.insertSound(
-                    UserSound(
-                        uri = pickedSoundUri,
-                        displayName = pickedSoundName
-                    )
-                )
+                dao.insertSound(UserSound(uri = pickedSoundUri, displayName = pickedSoundName))
             }
             onSoundSelected(pickedSoundUri)
         }
@@ -754,6 +788,8 @@ fun SoundPicker(
     }
 }
 
+// ---- Add Identifier Dialog ----
+
 @Composable
 fun AddIdentifierDialog(
     profile: Contact,
@@ -783,7 +819,10 @@ fun AddIdentifierDialog(
     }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            PreviewPlayer.stop()
+            onDismiss()
+        },
         title = {
             Text(when (step) {
                 0 -> "Step 1 of 3 — Choose App"
@@ -1034,6 +1073,7 @@ fun AddIdentifierDialog(
                                 )
                             )
                         }
+                        PreviewPlayer.stop()
                         onDismiss()
                     }
                 }
@@ -1042,12 +1082,17 @@ fun AddIdentifierDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = { if (step == 0) onDismiss() else step-- }) {
+            TextButton(onClick = {
+                PreviewPlayer.stop()
+                if (step == 0) onDismiss() else step--
+            }) {
                 Text(if (step == 0) "Cancel" else "← Back")
             }
         }
     )
 }
+
+// ---- Edit Identifier Dialog ----
 
 @Composable
 fun EditIdentifierDialog(
@@ -1079,7 +1124,10 @@ fun EditIdentifierDialog(
     }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            PreviewPlayer.stop()
+            onDismiss()
+        },
         title = {
             Text(
                 if (step == 0) "Step 1 of 2 — Edit Contact"
@@ -1260,13 +1308,17 @@ fun EditIdentifierDialog(
                                 )
                             )
                         }
+                        PreviewPlayer.stop()
                         onDismiss()
                     }
                 }
             }) { Text(if (step == 1) "Save" else "Next →") }
         },
         dismissButton = {
-            TextButton(onClick = { if (step == 0) onDismiss() else step-- }) {
+            TextButton(onClick = {
+                PreviewPlayer.stop()
+                if (step == 0) onDismiss() else step--
+            }) {
                 Text(if (step == 0) "Cancel" else "← Back")
             }
         }

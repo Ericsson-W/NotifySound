@@ -38,4 +38,7 @@ interface ContactDao {
 
     @Query("SELECT * FROM contact_identifiers")
     suspend fun getAllIdentifiers(): List<ContactIdentifier>
+
+    @Query("SELECT COUNT(*) FROM contacts")
+    suspend fun getContactCount(): Int
 }
