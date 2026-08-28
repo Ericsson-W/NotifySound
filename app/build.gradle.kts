@@ -59,4 +59,5 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
     implementation("androidx.core:core-ktx:1.19.0")
+    implementation("com.googlecode.libphonenumber:libphonenumber:8.13.44")
 }

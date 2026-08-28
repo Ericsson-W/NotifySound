@@ -39,12 +39,14 @@ class NotificationListener : NotificationListenerService() {
     private val managedApps = setOf(
         "com.google.android.gm",
         "com.instagram.android",
-        "com.whatsapp"
+        "com.whatsapp",
+        "org.telegram.messenger"  // add this
     )
 
     private val summaryTitles = mapOf(
         "com.whatsapp" to setOf("WhatsApp"),
-        "com.instagram.android" to setOf("Instagram")
+        "com.instagram.android" to setOf("Instagram"),
+        "org.telegram.messenger" to setOf("Telegram")
     )
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -325,6 +327,21 @@ class NotificationListener : NotificationListenerService() {
                 }
                 title
             }
+            "org.telegram.messenger" -> {
+                // Try to get phone number from people list first
+                val people = extras.getStringArray(Notification.EXTRA_PEOPLE)
+                if (!people.isNullOrEmpty()) {
+                    val uri = people[0]
+                    if (uri.startsWith("tel:")) {
+                        val number = uri.removePrefix("tel:")
+                        Log.d("NotifySound", "Telegram PHONE=$number")
+                        return number
+                    }
+                }
+                // Fall back to title (display name)
+                Log.d("NotifySound", "Telegram TITLE=$title")
+                title
+            }
             else -> title
         }
     }
@@ -340,6 +357,15 @@ class NotificationListener : NotificationListenerService() {
                 "${sbn.packageName}_$identifier"
             }
             "com.whatsapp" -> "${sbn.key}_${sbn.notification.`when`}"
+            "org.telegram.messenger" -> {
+                val people = sbn.notification.extras.getStringArray(Notification.EXTRA_PEOPLE)
+                val telUri = people?.firstOrNull { it.startsWith("tel:") }
+                if (telUri != null) {
+                    "${sbn.packageName}_${telUri}_${sbn.postTime}"
+                } else {
+                    "${sbn.key}_${sbn.postTime}"
+                }
+            }
             else -> sbn.key
         }
     }
@@ -366,7 +392,10 @@ class NotificationListener : NotificationListenerService() {
         val notifKey = buildNotifKey(sbn)
 
         synchronized(this) {
-            if (playedKeys.contains(notifKey)) return
+            if (playedKeys.contains(notifKey)) {
+                Log.d("NotifySound", "BLOCKED by playedKeys: $notifKey")
+                return
+            }
             playedKeys.add(notifKey)
             keyMapping[sbn.key] = notifKey
         }
@@ -401,9 +430,10 @@ class NotificationListener : NotificationListenerService() {
                     byId ?: byName
                 }
 
-                "com.whatsapp" -> {
+                "com.whatsapp",
+                "org.telegram.messenger" -> {
                     identifiersForApp.find { rule ->
-                        identifier.equals(rule.identifier, ignoreCase = true) ||
+                        identifier == rule.identifier ||
                                 (identifier.length >= 9 && rule.identifier.length >= 9 &&
                                         identifier.takeLast(9) == rule.identifier.takeLast(9))
                     }
@@ -420,8 +450,21 @@ class NotificationListener : NotificationListenerService() {
                 Log.d("NotifySound", "MATCHED: ${matched.identifier} → ${matched.soundFileName}")
                 playCustomSound(matched.soundFileName)
             } else {
-                Log.d("NotifySound", "No match → default sound")
-                playDefaultNotificationSound()
+                // For Telegram without tel: URI it's a group update notification
+                // Don't play default sound — the real message notification follows with tel: URI
+                val shouldPlayDefault = if (sbn.packageName == "org.telegram.messenger") {
+                    val people = sbn.notification.extras.getStringArray(Notification.EXTRA_PEOPLE)
+                    people?.any { it.startsWith("tel:") } == true
+                } else {
+                    true
+                }
+
+                if (shouldPlayDefault) {
+                    Log.d("NotifySound", "No match → default sound")
+                    playDefaultNotificationSound()
+                } else {
+                    Log.d("NotifySound", "Telegram group update — skipping default sound")
+                }
             }
         }
     }

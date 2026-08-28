@@ -7,14 +7,17 @@ import android.provider.ContactsContract
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -27,15 +30,21 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.launch
+import androidx.compose.material.icons.filled.Info
 
 // ---- Supported Apps ----
 
@@ -43,6 +52,7 @@ val supportedApps = listOf(
     AppOption("Gmail", "com.google.android.gm"),
     AppOption("Instagram", "com.instagram.android"),
     AppOption("WhatsApp", "com.whatsapp"),
+    AppOption("Telegram", "org.telegram.messenger"),
 )
 
 data class AppOption(val label: String, val packageName: String)
@@ -76,6 +86,35 @@ fun resolveSoundRes(fileName: String): Int {
     }
 }
 
+fun normalizePhoneNumber(
+    context: android.content.Context,
+    rawNumber: String
+): String {
+    return try {
+        // Try to get country code from SIM or device locale
+        val telephonyManager = context.getSystemService(
+            android.content.Context.TELEPHONY_SERVICE
+        ) as android.telephony.TelephonyManager
+
+        val countryCode = telephonyManager.networkCountryIso
+            .ifEmpty { telephonyManager.simCountryIso }
+            .ifEmpty {
+                java.util.Locale.getDefault().country.lowercase()
+            }
+            .uppercase()
+
+        val phoneUtil = com.google.i18n.phonenumbers.PhoneNumberUtil.getInstance()
+        val parsed = phoneUtil.parse(rawNumber, countryCode)
+        if (phoneUtil.isValidNumber(parsed)) {
+            phoneUtil.format(parsed, com.google.i18n.phonenumbers.PhoneNumberUtil.PhoneNumberFormat.E164)
+        } else {
+            rawNumber
+        }
+    } catch (e: Exception) {
+        rawNumber
+    }
+}
+
 fun isCustomSound(soundFileName: String): Boolean {
     return soundFileName.startsWith("content://") ||
             soundFileName.startsWith("file://")
@@ -98,6 +137,16 @@ fun getDisplayNameForSound(context: android.content.Context, soundFileName: Stri
     }
 }
 
+// ---- App Icon Loader ----
+
+fun getAppIcon(context: android.content.Context, packageName: String): ImageBitmap? {
+    return try {
+        context.packageManager.getApplicationIcon(packageName).toBitmap().asImageBitmap()
+    } catch (e: Exception) {
+        null
+    }
+}
+
 // ---- Singleton Preview Player ----
 
 object PreviewPlayer {
@@ -111,7 +160,6 @@ object PreviewPlayer {
             } catch (e: Exception) { }
             current = null
         }
-
         try {
             val mp = MediaPlayer()
             mp.setAudioAttributes(
@@ -179,11 +227,14 @@ fun resolveContactFromUri(
                     null
                 )?.use { phoneCursor ->
                     if (phoneCursor.moveToFirst()) {
-                        phoneNumber = phoneCursor.getString(0)
+                        val raw = phoneCursor.getString(0)
                             .replace(" ", "")
                             .replace("-", "")
                             .replace("(", "")
                             .replace(")", "")
+                            .replace(".", "")
+                        // Normalize to E.164 (+447911223344 format)
+                        phoneNumber = normalizePhoneNumber(context, raw)
                     }
                 }
             }
@@ -206,7 +257,8 @@ fun Modifier.scrollbar(
     val totalItems = layoutInfo.totalItemsCount
     val visibleItems = layoutInfo.visibleItemsInfo
     if (totalItems <= 0 || visibleItems.isEmpty()) return@drawWithContent
-    val viewportHeight = (layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset).toFloat()
+    val viewportHeight =
+        (layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset).toFloat()
     val averageItemSize = visibleItems.sumOf { it.size } / visibleItems.size.toFloat()
     val estimatedTotalHeight = totalItems * averageItemSize
     if (estimatedTotalHeight <= viewportHeight) return@drawWithContent
@@ -411,6 +463,18 @@ fun ProfileCard(
                         id.displayLabel else id.identifier
                     val soundDisplayName = getDisplayNameForSound(context, id.soundFileName)
 
+                    val isGmail = id.packageName == "com.google.android.gm"
+
+                    var appIcon by remember(id.packageName) {
+                        mutableStateOf<ImageBitmap?>(null)
+                    }
+
+                    LaunchedEffect(id.packageName) {
+                        if (!isGmail) {
+                            appIcon = getAppIcon(context, id.packageName)
+                        }
+                    }
+
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -418,47 +482,95 @@ fun ProfileCard(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                "$appLabel: $displayText",
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            if (id.packageName == "com.whatsapp" &&
-                                id.displayLabel.isNotEmpty()) {
-                                Text(
-                                    id.identifier,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    "Sound: $soundDisplayName",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                IconButton(
-                                    onClick = { previewSound(context, id.soundFileName) },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.PlayArrow,
-                                        contentDescription = "Preview sound",
-                                        modifier = Modifier.size(16.dp),
-                                        tint = MaterialTheme.colorScheme.primary
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            val currentIcon = appIcon
+                            when {
+                                isGmail -> {
+                                    Image(
+                                        painter = painterResource(R.drawable.ic_gmail),
+                                        contentDescription = "Gmail icon",
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(RoundedCornerShape(6.dp))
                                     )
+                                }
+                                currentIcon != null -> {
+                                    Image(
+                                        bitmap = currentIcon,
+                                        contentDescription = "$appLabel icon",
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                    )
+                                }
+                                else -> {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(MaterialTheme.colorScheme.primaryContainer),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            appLabel.first().toString(),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(10.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    displayText,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (id.packageName == "com.whatsapp" &&
+                                    id.displayLabel.isNotEmpty()
+                                ) {
+                                    Text(
+                                        id.identifier,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        "Sound: $soundDisplayName",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    IconButton(
+                                        onClick = { previewSound(context, id.soundFileName) },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.PlayArrow,
+                                            contentDescription = "Preview sound",
+                                            modifier = Modifier.size(16.dp),
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
                                 }
                             }
                         }
+
                         Row {
                             IconButton(onClick = { editingIdentifier = id }) {
                                 Icon(Icons.Default.Edit, contentDescription = "Edit")
@@ -824,11 +936,13 @@ fun AddIdentifierDialog(
             onDismiss()
         },
         title = {
-            Text(when (step) {
-                0 -> "Step 1 of 3 — Choose App"
-                1 -> "Step 2 of 3 — Enter Contact"
-                else -> "Step 3 of 3 — Choose Sound"
-            })
+            Text(
+                when (step) {
+                    0 -> "Step 1 of 3 — Choose App"
+                    1 -> "Step 2 of 3 — Enter Contact"
+                    else -> "Step 3 of 3 — Choose Sound"
+                }
+            )
         },
         text = {
             val scrollState = rememberScrollState()
@@ -844,6 +958,8 @@ fun AddIdentifierDialog(
                         .padding(bottom = if (showScrollHint) 24.dp else 0.dp)
                 ) {
                     when (step) {
+
+                        // Step 1 — Choose App
                         0 -> {
                             Text(
                                 "Which app is this profile for?",
@@ -888,14 +1004,19 @@ fun AddIdentifierDialog(
                             }
                         }
 
+                        // Step 2 — Enter Contact
                         1 -> {
                             when (selectedApp.packageName) {
-                                "com.whatsapp" -> {
+
+                                "com.whatsapp",
+                                "org.telegram.messenger" -> {
+                                    val appName = selectedApp.label
                                     Text(
-                                        "Find ${profile.name}'s WhatsApp contact:",
+                                        "Find ${profile.name}'s $appName contact:",
                                         style = MaterialTheme.typography.bodyMedium
                                     )
                                     Spacer(modifier = Modifier.height(12.dp))
+
                                     Button(
                                         onClick = onPickContact,
                                         modifier = Modifier.fillMaxWidth()
@@ -904,6 +1025,8 @@ fun AddIdentifierDialog(
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text("Pick from Contacts ★ Recommended")
                                     }
+
+                                    // Contact picked successfully
                                     if (displayLabel.isNotEmpty() && identifierInput.isNotEmpty()) {
                                         Spacer(modifier = Modifier.height(12.dp))
                                         Card(
@@ -934,9 +1057,40 @@ fun AddIdentifierDialog(
                                             modifier = Modifier.fillMaxWidth()
                                         ) { Text("Clear selection") }
                                     }
+
+                                    // Contact picked but no phone number found
+                                    if (pickedContactName.isNotEmpty() && identifierInput.isEmpty()) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Card(
+                                            colors = CardDefaults.cardColors(
+                                                containerColor = MaterialTheme.colorScheme.errorContainer
+                                            ),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(12.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Info,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Text(
+                                                    "This contact has no phone number saved. Add a number to their contact first.",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                                )
+                                            }
+                                        }
+                                    }
+
                                     Spacer(modifier = Modifier.height(12.dp))
                                     HorizontalDivider()
                                     Spacer(modifier = Modifier.height(12.dp))
+
                                     Text(
                                         "Or enter phone number manually:",
                                         style = MaterialTheme.typography.bodySmall,
@@ -1010,6 +1164,7 @@ fun AddIdentifierDialog(
                             }
                         }
 
+                        // Step 3 — Choose Sound
                         2 -> {
                             val displayName = if (displayLabel.isNotEmpty())
                                 displayLabel else identifierInput
@@ -1057,27 +1212,29 @@ fun AddIdentifierDialog(
             }
         },
         confirmButton = {
-            Button(onClick = {
-                when (step) {
-                    0 -> step = 1
-                    1 -> { if (identifierInput.isNotBlank()) step = 2 }
-                    2 -> {
-                        coroutineScope.launch {
-                            dao.insertIdentifier(
-                                ContactIdentifier(
-                                    contactId = profile.id,
-                                    packageName = selectedApp.packageName,
-                                    identifier = identifierInput.trim(),
-                                    soundFileName = selectedSound,
-                                    displayLabel = displayLabel.trim()
+            Button(
+                onClick = {
+                    when (step) {
+                        0 -> step = 1
+                        1 -> { if (identifierInput.isNotBlank()) step = 2 }
+                        2 -> {
+                            coroutineScope.launch {
+                                dao.insertIdentifier(
+                                    ContactIdentifier(
+                                        contactId = profile.id,
+                                        packageName = selectedApp.packageName,
+                                        identifier = identifierInput.trim(),
+                                        soundFileName = selectedSound,
+                                        displayLabel = displayLabel.trim()
+                                    )
                                 )
-                            )
+                            }
+                            PreviewPlayer.stop()
+                            onDismiss()
                         }
-                        PreviewPlayer.stop()
-                        onDismiss()
                     }
                 }
-            }) {
+            ) {
                 Text(if (step == 2) "Save" else "Next →")
             }
         },
@@ -1162,11 +1319,16 @@ fun EditIdentifierDialog(
                                         onClick = onPickContact,
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Icon(Icons.Default.Contacts, contentDescription = null)
+                                        Icon(
+                                            Icons.Default.Contacts,
+                                            contentDescription = null
+                                        )
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text("Pick from Contacts")
                                     }
-                                    if (displayLabel.isNotEmpty() && identifierInput.isNotEmpty()) {
+                                    if (displayLabel.isNotEmpty() &&
+                                        identifierInput.isNotEmpty()
+                                    ) {
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Card(
                                             colors = CardDefaults.cardColors(
@@ -1233,6 +1395,72 @@ fun EditIdentifierDialog(
                                         value = identifierInput,
                                         onValueChange = { identifierInput = it },
                                         label = { Text("Display name (as shown in notifications)") },
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+
+                                "org.telegram.messenger" -> {
+                                    Button(
+                                        onClick = onPickContact,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Contacts,
+                                            contentDescription = null
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Pick from Contacts")
+                                    }
+                                    if (displayLabel.isNotEmpty() &&
+                                        identifierInput.isNotEmpty()
+                                    ) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Card(
+                                            colors = CardDefaults.cardColors(
+                                                containerColor = MaterialTheme.colorScheme.primaryContainer
+                                            ),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Column(modifier = Modifier.padding(12.dp)) {
+                                                Text(
+                                                    displayLabel,
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                                )
+                                                Text(
+                                                    identifierInput,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                                )
+                                            }
+                                        }
+                                        TextButton(
+                                            onClick = {
+                                                displayLabel = ""
+                                                identifierInput = ""
+                                                onClearContact()
+                                            },
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) { Text("Clear selection") }
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    HorizontalDivider()
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        "Or enter phone number manually:",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    OutlinedTextField(
+                                        value = if (displayLabel.isEmpty()) identifierInput else "",
+                                        onValueChange = {
+                                            displayLabel = ""
+                                            identifierInput = it
+                                            onClearContact()
+                                        },
+                                        label = { Text("Phone number (e.g. +447911223344)") },
                                         singleLine = true,
                                         modifier = Modifier.fillMaxWidth()
                                     )
