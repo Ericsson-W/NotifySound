@@ -35,6 +35,11 @@ class NotificationListener : NotificationListenerService() {
         private const val CHANNEL_ID = "notifysound_service"
         private const val FOREGROUND_ID = 1
         private var savedNotificationVolume: Int = -1
+        private const val DEBUG = false
+    }
+
+    private fun log(msg: String) {
+        if (DEBUG) Log.d("NotifySound", msg)
     }
 
     private val managedApps = setOf(
@@ -96,7 +101,7 @@ class NotificationListener : NotificationListenerService() {
         super.onListenerConnected()
         isConnected = true
         listenerConnectedTime = System.currentTimeMillis()
-        Log.d("NotifySound", "CONNECTED")
+        log("CONNECTED")
         createNotificationChannel()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
@@ -124,7 +129,7 @@ class NotificationListener : NotificationListenerService() {
             @Suppress("DEPRECATION")
             stopForeground(true)
         }
-        Log.d("NotifySound", "DISCONNECTED")
+        log("DISCONNECTED")
     }
 
     // ---- Volume Management ----
@@ -209,7 +214,7 @@ class NotificationListener : NotificationListenerService() {
             mp.setVolume(volumeRatio, volumeRatio)
             mp.start()
             currentPlayer = mp
-            Log.d("NotifySound", "Playing: $soundFileName at volume $volumeRatio")
+            log("Playing: $soundFileName at volume $volumeRatio")
         } catch (e: Exception) {
             Log.e("NotifySound", "Sound failed: ${e.message}")
         }
@@ -334,12 +339,14 @@ class NotificationListener : NotificationListenerService() {
     private fun getGmailSenderEmail(extras: android.os.Bundle): String {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                @Suppress("DEPRECATION")
                 val people = extras.getParcelableArrayList<android.app.Person>(
                     Notification.EXTRA_PEOPLE_LIST
                 )
                 val uri = people?.firstOrNull()?.uri
                 if (!uri.isNullOrEmpty()) return uri.removePrefix("mailto:")
             } else {
+                @Suppress("DEPRECATION")
                 val people = extras.getParcelableArrayList<android.os.Parcelable>(
                     Notification.EXTRA_PEOPLE_LIST
                 )
@@ -380,12 +387,13 @@ class NotificationListener : NotificationListenerService() {
                         title.substringAfter(": ")
                     else -> title
                 }
-                Log.d("NotifySound", "Instagram SENDER=$senderName SENDER_ID=$senderId")
+                log("Instagram SENDER=$senderName SENDER_ID=$senderId")
                 senderName
             }
 
             "com.whatsapp" -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    @Suppress("DEPRECATION")
                     val peopleList = extras.getParcelableArrayList<android.app.Person>(
                         Notification.EXTRA_PEOPLE_LIST
                     )
@@ -399,7 +407,7 @@ class NotificationListener : NotificationListenerService() {
             }
 
             "org.telegram.messenger" -> {
-                Log.d("NotifySound", "Telegram TITLE=$title")
+                log("Telegram TITLE=$title")
                 title
             }
 
@@ -417,12 +425,13 @@ class NotificationListener : NotificationListenerService() {
                 val extras = sbn.notification.extras
                 val senderEmail = getGmailSenderEmail(extras)
                 val title = extras.getString(Notification.EXTRA_TITLE) ?: ""
-                val identifier = if (senderEmail.isNotEmpty()) senderEmail else title
-                "${sbn.packageName}_$identifier"
+                val id = if (senderEmail.isNotEmpty()) senderEmail else title
+                "${sbn.packageName}_$id"
             }
             "com.whatsapp" ->
                 "${sbn.key}_${sbn.notification.`when`}"
             "org.telegram.messenger" -> {
+                @Suppress("DEPRECATION")
                 val people = sbn.notification.extras.getStringArray(Notification.EXTRA_PEOPLE)
                 val telUri = people?.firstOrNull { it.startsWith("tel:") }
                 if (telUri != null) {
@@ -456,7 +465,7 @@ class NotificationListener : NotificationListenerService() {
             )
             if (!prefs.getBoolean(sbn.packageName, false)) {
                 prefs.edit().putBoolean(sbn.packageName, true).apply()
-                Log.d("NotifySound", "Auto-verified: ${sbn.packageName}")
+                log("Auto-verified: ${sbn.packageName}")
             }
         }
     }
@@ -470,24 +479,22 @@ class NotificationListener : NotificationListenerService() {
 
         val identifier = getNotificationIdentifier(sbn)
 
-        // Telegram: skip if identifier is just the group name with no sender
+        // Telegram: skip group summary (identifier == group name only, no sender)
         if (sbn.packageName == "org.telegram.messenger") {
             val convTitle = sbn.notification.extras.getCharSequence(
                 Notification.EXTRA_CONVERSATION_TITLE
             )?.toString() ?: ""
             if (convTitle.isNotEmpty() && identifier == convTitle) {
-                Log.d("NotifySound", "Telegram: group summary — skipping")
+                log("Telegram: group summary — skipping")
                 return
             }
         }
 
-        // Skip empty identifier — summary/system notifications
         if (identifier.isEmpty()) {
-            Log.d("NotifySound", "Empty identifier — skipping")
+            log("Empty identifier — skipping")
             return
         }
 
-        // Sender cooldown
         val senderCooldownKey = "${sbn.packageName}_$identifier"
         val now = System.currentTimeMillis()
         synchronized(this) {
@@ -496,13 +503,12 @@ class NotificationListener : NotificationListenerService() {
             lastPlayedBySender[senderCooldownKey] = now
         }
 
-        // Save volume before suppressing
         if (savedNotificationVolume < 0) {
             val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
             savedNotificationVolume = audioManager.getStreamVolume(
                 AudioManager.STREAM_NOTIFICATION
             )
-            Log.d("NotifySound", "Volume saved: $savedNotificationVolume")
+            log("Volume saved: $savedNotificationVolume")
         }
 
         suppressChannelSound()
@@ -512,14 +518,14 @@ class NotificationListener : NotificationListenerService() {
 
         synchronized(this) {
             if (playedKeys.contains(notifKey)) {
-                Log.d("NotifySound", "BLOCKED by playedKeys: $notifKey")
+                log("BLOCKED by playedKeys: $notifKey")
                 return
             }
             playedKeys.add(notifKey)
             keyMapping[sbn.key] = notifKey
         }
 
-        Log.d("NotifySound", "RECEIVED: ${sbn.packageName} | $identifier")
+        log("RECEIVED: ${sbn.packageName} | $identifier")
 
         serviceScope.launch {
             val dao = AppDatabase.getDatabase(applicationContext).contactDao()
@@ -543,7 +549,7 @@ class NotificationListener : NotificationListenerService() {
 
                     if (byName != null && senderId.isNotEmpty()) {
                         dao.updateIdentifier(byName.copy(instagramSenderId = senderId))
-                        Log.d("NotifySound", "Locked sender_id $senderId for ${byName.identifier}")
+                        log("Locked sender_id $senderId for ${byName.identifier}")
                     }
 
                     byId ?: byName
@@ -568,11 +574,11 @@ class NotificationListener : NotificationListenerService() {
                         identifier
                     }
 
-                    Log.d("NotifySound", "Telegram senderPortion=$senderPortion")
+                    log("Telegram senderPortion=$senderPortion")
 
                     val result = identifiersForApp.find { rule ->
                         when {
-                            // Path 1 — identifier is a phone number (emulator with tel: URI)
+                            // Path 1 — senderPortion is a phone number (emulator)
                             senderPortion.startsWith("+") -> {
                                 senderPortion == rule.identifier ||
                                         (senderPortion.length >= 9 && rule.identifier.length >= 9 &&
@@ -581,11 +587,11 @@ class NotificationListener : NotificationListenerService() {
                             // Path 2 — rule has phone, look up contact name and compare
                             rule.identifier.startsWith("+") -> {
                                 val contactName = resolveNameFromPhone(rule.identifier)
-                                Log.d("NotifySound", "Telegram contactName=$contactName")
+                                log("Telegram contactName=$contactName")
                                 contactName.isNotEmpty() &&
                                         senderPortion.startsWith(contactName, ignoreCase = true)
                             }
-                            // Path 3 — both are display names, direct match
+                            // Path 3 — both are display names
                             else -> {
                                 senderPortion.equals(rule.identifier, ignoreCase = true) ||
                                         (!rule.displayLabel.isNullOrEmpty() &&
@@ -594,7 +600,6 @@ class NotificationListener : NotificationListenerService() {
                         }
                     }
 
-                    // Lock in phone if matched by name
                     if (result != null && !result.identifier.startsWith("+") &&
                         !senderPortion.startsWith("+")) {
                         val phone = resolvePhoneFromDisplayName(senderPortion)
@@ -604,13 +609,14 @@ class NotificationListener : NotificationListenerService() {
                                 identifier = phone,
                                 displayLabel = currentName
                             ))
-                            Log.d("NotifySound", "Telegram: locked phone=$phone name=$currentName")
+                            log("Telegram: locked phone=$phone name=$currentName")
                         }
                     } else if (result != null && result.identifier.startsWith("+")) {
-                        val currentName = resolveNameFromPhone(result.identifier).ifEmpty { senderPortion }
+                        val currentName = resolveNameFromPhone(result.identifier)
+                            .ifEmpty { senderPortion }
                         if (!currentName.equals(result.displayLabel, ignoreCase = true)) {
                             dao.updateIdentifier(result.copy(displayLabel = currentName))
-                            Log.d("NotifySound", "Telegram: updated name to $currentName")
+                            log("Telegram: updated name to $currentName")
                         }
                     }
 
@@ -625,10 +631,10 @@ class NotificationListener : NotificationListenerService() {
             }
 
             if (matched != null) {
-                Log.d("NotifySound", "MATCHED: ${matched.identifier} → ${matched.soundFileName}")
+                log("MATCHED: ${matched.identifier} → ${matched.soundFileName}")
                 playCustomSound(matched.soundFileName)
             } else {
-                Log.d("NotifySound", "No match → default sound")
+                log("No match → default sound")
                 playDefaultNotificationSound()
             }
         }
