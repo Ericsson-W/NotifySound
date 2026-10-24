@@ -1,4 +1,4 @@
-package com.example.notifysound
+package com.notiwizz.app
 
 import android.content.Intent
 import android.os.Build

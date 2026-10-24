@@ -1,4 +1,4 @@
-package com.example.notifysound
+package com.notiwizz.app
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*

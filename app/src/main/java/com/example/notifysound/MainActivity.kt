@@ -1,4 +1,4 @@
-package com.example.notifysound
+package com.notiwizz.app
 
 import android.content.ComponentName
 import android.content.Intent
@@ -29,7 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.example.notifysound.ui.theme.NotifySoundTheme
+import com.notiwizz.app.ui.theme.NotifySoundTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
