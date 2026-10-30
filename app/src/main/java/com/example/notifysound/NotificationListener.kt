@@ -35,7 +35,10 @@ class NotificationListener : NotificationListenerService() {
         private const val CHANNEL_ID = "notifysound_service"
         private const val FOREGROUND_ID = 1
         private var savedNotificationVolume: Int = -1
-        private const val DEBUG = false
+        private var currentRingtone: android.media.Ringtone? = null
+
+        @Volatile private var customSoundPlaying = false
+        private const val DEBUG = true
     }
 
     private fun log(msg: String) {
@@ -175,7 +178,10 @@ class NotificationListener : NotificationListenerService() {
     }
 
     private fun playCustomSound(soundFileName: String) {
+        customSoundPlaying = true
         try {
+            currentRingtone?.stop()
+            currentRingtone = null
             currentPlayer?.let {
                 try { if (it.isPlaying) it.stop(); it.release() } catch (_: Exception) { }
                 currentPlayer = null
@@ -195,13 +201,10 @@ class NotificationListener : NotificationListenerService() {
                     .build()
             )
 
-            if (soundFileName.startsWith("content://") ||
-                soundFileName.startsWith("file://")) {
+            if (soundFileName.startsWith("content://") || soundFileName.startsWith("file://")) {
                 mp.setDataSource(applicationContext, android.net.Uri.parse(soundFileName))
             } else {
-                val afd = applicationContext.resources.openRawResourceFd(
-                    resolveSoundFileName(soundFileName)
-                )
+                val afd = applicationContext.resources.openRawResourceFd(resolveSoundFileName(soundFileName))
                 mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
                 afd.close()
             }
@@ -209,18 +212,24 @@ class NotificationListener : NotificationListenerService() {
             mp.setOnCompletionListener {
                 it.release()
                 currentPlayer = null
+                customSoundPlaying = false
             }
             mp.prepare()
             mp.setVolume(volumeRatio, volumeRatio)
             mp.start()
             currentPlayer = mp
-            log("Playing: $soundFileName at volume $volumeRatio")
+            Log.d("NotifySound", "Playing: $soundFileName at volume $volumeRatio")
         } catch (e: Exception) {
             Log.e("NotifySound", "Sound failed: ${e.message}")
+            customSoundPlaying = false
         }
     }
 
     private fun playDefaultNotificationSound() {
+        if (customSoundPlaying) {
+            Log.d("NotifySound", "Custom sound active — skipping default")
+            return
+        }
         try {
             currentPlayer?.let {
                 try { if (it.isPlaying) it.stop(); it.release() } catch (_: Exception) { }
@@ -228,6 +237,8 @@ class NotificationListener : NotificationListenerService() {
             }
             val defaultUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
             val ringtone = RingtoneManager.getRingtone(applicationContext, defaultUri)
+            currentRingtone?.stop()
+            currentRingtone = ringtone
             ringtone.audioAttributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ALARM)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
