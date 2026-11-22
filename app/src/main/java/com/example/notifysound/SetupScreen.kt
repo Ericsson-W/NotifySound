@@ -1,4 +1,4 @@
-package com.example.notifysound
+package com.notiwizz.app
 
 import android.content.Intent
 import android.os.Build
@@ -25,16 +25,6 @@ data class AppSetupItem(
 )
 
 val appsToSetup = listOf(
-    AppSetupItem(
-        label = "Gmail",
-        packageName = "com.google.android.gm",
-        steps = listOf(
-            "Tap 'Open Gmail Notification Settings' below",
-            "Tap on a notification category (e.g. 'New mail')",
-            "Tap 'Sound' and select 'None'",
-            "Repeat for any other categories listed"
-        )
-    ),
     AppSetupItem(
         label = "Instagram",
         packageName = "com.instagram.android",

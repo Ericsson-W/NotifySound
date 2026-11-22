@@ -1,4 +1,4 @@
-package com.example.notifysound
+package com.notiwizz.app
 
 import android.content.ComponentName
 import android.content.Intent
@@ -29,7 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.example.notifysound.ui.theme.NotifySoundTheme
+import com.notiwizz.app.ui.theme.NotifySoundTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -137,8 +137,10 @@ class MainActivity : ComponentActivity() {
     private fun buildUI() {
         setContent {
             var selectedTheme by remember { mutableStateOf(getSavedTheme()) }
+            val themePrefs = getSharedPreferences("notiwizz_theme", MODE_PRIVATE)
+            var darkTheme by remember { mutableStateOf(themePrefs.getBoolean("dark_mode", false)) }
 
-            NotifySoundTheme(colorTheme = selectedTheme) {
+            NotifySoundTheme(colorTheme = selectedTheme, darkTheme = darkTheme) {
                 val context = LocalContext.current
                 val coroutineScope = rememberCoroutineScope()
 
@@ -152,9 +154,22 @@ class MainActivity : ComponentActivity() {
                 var showOnboarding by remember { mutableStateOf(isFirstLaunch()) }
                 var showSoundLibrary by remember { mutableStateOf(false) }
 
-                // Poll state every second
+                var activeRulesCount by remember { mutableStateOf(0) }
+                var lastTriggeredContact by remember { mutableStateOf("") }
+                var lastTriggeredSound by remember { mutableStateOf("") }
+                var lastTriggeredTime by remember { mutableStateOf(0L) }
+
                 LaunchedEffect(Unit) {
                     while (true) {
+                        coroutineScope.launch {
+                            activeRulesCount = AppDatabase.getDatabase(context)
+                                .contactDao().getIdentifierCount()
+                        }
+                        val trigPrefs = context.getSharedPreferences("notiwizz_last_triggered", MODE_PRIVATE)
+                        lastTriggeredContact = trigPrefs.getString("contact_name", "") ?: ""
+                        lastTriggeredSound = trigPrefs.getString("sound_name", "") ?: ""
+                        lastTriggeredTime = trigPrefs.getLong("timestamp", 0L)
+
                         isRunning = NotificationListener.isConnected
                         hasPermission = isNotificationAccessGranted()
                         hasNotifPermission = hasNotificationPermission()
@@ -242,6 +257,15 @@ class MainActivity : ComponentActivity() {
                                 profileCount = profileCount,
                                 appsConfigured = appsConfigured,
                                 selectedTheme = selectedTheme,
+                                activeRulesCount = activeRulesCount,
+                                lastTriggeredContact = lastTriggeredContact,
+                                lastTriggeredSound = lastTriggeredSound,
+                                lastTriggeredTime = lastTriggeredTime,
+                                darkTheme = darkTheme,
+                                onDarkThemeToggle = {
+                                    darkTheme = it
+                                    themePrefs.edit().putBoolean("dark_mode", it).apply()
+                                },
                                 onThemeSelected = { theme ->
                                     selectedTheme = theme
                                     saveTheme(theme)
@@ -287,7 +311,13 @@ fun HomeScreen(
     onFixNotifPermission: () -> Unit,
     onManageProfiles: () -> Unit,
     onSoundLibrary: () -> Unit,
-    onAppSetup: () -> Unit
+    onAppSetup: () -> Unit,
+    activeRulesCount: Int,
+    lastTriggeredContact: String,
+    lastTriggeredSound: String,
+    lastTriggeredTime: Long,
+    darkTheme: Boolean,
+    onDarkThemeToggle: (Boolean) -> Unit,
 ) {
     val primary = MaterialTheme.colorScheme.primary
     val scrollState = rememberScrollState()
@@ -303,7 +333,7 @@ fun HomeScreen(
         ) {
             Column {
                 Text(
-                    "NotifySound",
+                    "NotiWizz",
                     style = MaterialTheme.typography.headlineMedium,
                     color = Color.White
                 )
@@ -403,24 +433,7 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(12.dp))
                 }
 
-                // Stats row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    HomeStatCard(
-                        value = "$profileCount",
-                        label = "profiles",
-                        modifier = Modifier.weight(1f)
-                    )
-                    HomeStatCard(
-                        value = "$appsConfigured",
-                        label = "apps active",
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 HomeSectionLabel("Manage")
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -445,10 +458,85 @@ fun HomeScreen(
                 }
 
                 Spacer(modifier = Modifier.height(20.dp))
+                HomeSectionLabel("Activity")
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Tune,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Active rules", style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    "Across all apps",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                "$activeRulesCount",
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        if (lastTriggeredContact.isNotEmpty()) {
+                            HorizontalDivider(
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                                thickness = 0.5.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.History,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Last triggered", style = MaterialTheme.typography.titleSmall)
+                                    Text(
+                                        "$lastTriggeredContact · $lastTriggeredSound",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    )
+                                }
+                                Text(
+                                    formatRelativeTime(lastTriggeredTime),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
                 HomeSectionLabel("Settings")
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Settings card — contains both App Setup and Theme Colour
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
@@ -494,7 +582,40 @@ fun HomeScreen(
                             color = MaterialTheme.colorScheme.outlineVariant
                         )
 
-                        // Theme colour row
+                        // Dark theme toggle row
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Brightness2,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Dark theme", style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    "Switch appearance",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = darkTheme,
+                                onCheckedChange = onDarkThemeToggle
+                            )
+                        }
+
+                        HorizontalDivider(
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant
+                        )
+
+                        // Accent colour row
                         Column(modifier = Modifier.padding(16.dp)) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -552,6 +673,7 @@ fun HomeScreen(
         }
     }
 }
+
 // ---- Home Screen Components ----
 
 @Composable
@@ -657,5 +779,15 @@ fun HomeNavRow(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
+}
+
+fun formatRelativeTime(timestamp: Long): String {
+    val diff = System.currentTimeMillis() - timestamp
+    return when {
+        diff < 60_000 -> "just now"
+        diff < 3_600_000 -> "${diff / 60_000} min ago"
+        diff < 86_400_000 -> "${diff / 3_600_000} hr ago"
+        else -> "${diff / 86_400_000}d ago"
     }
 }

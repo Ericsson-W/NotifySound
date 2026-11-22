@@ -1,4 +1,4 @@
-package com.example.notifysound
+package com.notiwizz.app
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -21,6 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 class NotificationListener : NotificationListenerService() {
 
@@ -35,6 +36,9 @@ class NotificationListener : NotificationListenerService() {
         private const val CHANNEL_ID = "notifysound_service"
         private const val FOREGROUND_ID = 1
         private var savedNotificationVolume: Int = -1
+        private var currentRingtone: android.media.Ringtone? = null
+
+        @Volatile private var customSoundPlaying = false
         private const val DEBUG = false
     }
 
@@ -175,7 +179,10 @@ class NotificationListener : NotificationListenerService() {
     }
 
     private fun playCustomSound(soundFileName: String) {
+        customSoundPlaying = true
         try {
+            currentRingtone?.stop()
+            currentRingtone = null
             currentPlayer?.let {
                 try { if (it.isPlaying) it.stop(); it.release() } catch (_: Exception) { }
                 currentPlayer = null
@@ -195,13 +202,10 @@ class NotificationListener : NotificationListenerService() {
                     .build()
             )
 
-            if (soundFileName.startsWith("content://") ||
-                soundFileName.startsWith("file://")) {
+            if (soundFileName.startsWith("content://") || soundFileName.startsWith("file://")) {
                 mp.setDataSource(applicationContext, android.net.Uri.parse(soundFileName))
             } else {
-                val afd = applicationContext.resources.openRawResourceFd(
-                    resolveSoundFileName(soundFileName)
-                )
+                val afd = applicationContext.resources.openRawResourceFd(resolveSoundFileName(soundFileName))
                 mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
                 afd.close()
             }
@@ -209,32 +213,43 @@ class NotificationListener : NotificationListenerService() {
             mp.setOnCompletionListener {
                 it.release()
                 currentPlayer = null
+                customSoundPlaying = false
             }
             mp.prepare()
             mp.setVolume(volumeRatio, volumeRatio)
             mp.start()
             currentPlayer = mp
-            log("Playing: $soundFileName at volume $volumeRatio")
+            Log.d("NotifySound", "Playing: $soundFileName at volume $volumeRatio")
         } catch (e: Exception) {
             Log.e("NotifySound", "Sound failed: ${e.message}")
+            customSoundPlaying = false
         }
     }
 
     private fun playDefaultNotificationSound() {
-        try {
-            currentPlayer?.let {
-                try { if (it.isPlaying) it.stop(); it.release() } catch (_: Exception) { }
-                currentPlayer = null
+        serviceScope.launch {
+            delay(150)
+            if (customSoundPlaying) {
+                Log.d("NotifySound", "Custom sound active — skipping default")
+                return@launch
             }
-            val defaultUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            val ringtone = RingtoneManager.getRingtone(applicationContext, defaultUri)
-            ringtone.audioAttributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ALARM)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-            ringtone.play()
-        } catch (e: Exception) {
-            Log.e("NotifySound", "Default sound failed: ${e.message}")
+            try {
+                currentPlayer?.let {
+                    try { if (it.isPlaying) it.stop(); it.release() } catch (_: Exception) { }
+                    currentPlayer = null
+                }
+                val defaultUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                val ringtone = RingtoneManager.getRingtone(applicationContext, defaultUri)
+                currentRingtone?.stop()
+                currentRingtone = ringtone
+                ringtone.audioAttributes = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+                ringtone.play()
+            } catch (e: Exception) {
+                Log.e("NotifySound", "Default sound failed: ${e.message}")
+            }
         }
     }
 
@@ -451,22 +466,13 @@ class NotificationListener : NotificationListenerService() {
     }
 
     private fun autoVerifySetup(sbn: StatusBarNotification) {
-        @Suppress("DEPRECATION")
-        val sound = sbn.notification.sound
-        @Suppress("DEPRECATION")
-        val defaults = sbn.notification.defaults
-        val hasDefaultSound = (defaults and Notification.DEFAULT_SOUND) != 0
-        val isSilent = sound == null && !hasDefaultSound
-
-        if (sbn.packageName == "com.google.android.gm" && isSilent) {
-            val prefs = applicationContext.getSharedPreferences(
-                "notifysound_setup",
-                android.content.Context.MODE_PRIVATE
-            )
-            if (!prefs.getBoolean(sbn.packageName, false)) {
-                prefs.edit().putBoolean(sbn.packageName, true).apply()
-                log("Auto-verified: ${sbn.packageName}")
-            }
+        val prefs = applicationContext.getSharedPreferences(
+            "notifysound_setup",
+            android.content.Context.MODE_PRIVATE
+        )
+        if (!prefs.getBoolean(sbn.packageName, false)) {
+            prefs.edit().putBoolean(sbn.packageName, true).apply()
+            log("Auto-verified: ${sbn.packageName}")
         }
     }
 
@@ -631,9 +637,19 @@ class NotificationListener : NotificationListenerService() {
             }
 
             if (matched != null) {
+                val trigPrefs = applicationContext.getSharedPreferences(
+                    "notiwizz_last_triggered", android.content.Context.MODE_PRIVATE
+                )
+                val displayName = matched.displayLabel.ifEmpty { matched.identifier }
+                trigPrefs.edit()
+                    .putString("contact_name", displayName)
+                    .putString("sound_name", matched.soundFileName)
+                    .putLong("timestamp", System.currentTimeMillis())
+                    .apply()
                 log("MATCHED: ${matched.identifier} → ${matched.soundFileName}")
                 playCustomSound(matched.soundFileName)
-            } else {
+            }
+            else {
                 log("No match → default sound")
                 playDefaultNotificationSound()
             }

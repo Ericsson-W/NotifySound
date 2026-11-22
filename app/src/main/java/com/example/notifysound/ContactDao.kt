@@ -1,4 +1,4 @@
-package com.example.notifysound
+package com.notiwizz.app
 
 import androidx.room.Dao
 import androidx.room.Delete
@@ -41,4 +41,7 @@ interface ContactDao {
 
     @Query("SELECT COUNT(*) FROM contacts")
     suspend fun getContactCount(): Int
+
+    @Query("SELECT COUNT(*) FROM contact_identifiers")
+    suspend fun getIdentifierCount(): Int
 }

@@ -1,4 +1,4 @@
-package com.example.notifysound
+package com.notiwizz.app
 
 import org.junit.Test
 

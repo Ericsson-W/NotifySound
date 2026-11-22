@@ -1,4 +1,4 @@
-package com.example.notifysound
+package com.notiwizz.app
 
 import android.media.AudioAttributes
 import android.media.MediaPlayer
