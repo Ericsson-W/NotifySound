@@ -39,7 +39,7 @@ class NotificationListener : NotificationListenerService() {
         private var currentRingtone: android.media.Ringtone? = null
 
         @Volatile private var customSoundPlaying = false
-        private const val DEBUG = true
+        private const val DEBUG = false
     }
 
     private fun log(msg: String) {
@@ -637,9 +637,19 @@ class NotificationListener : NotificationListenerService() {
             }
 
             if (matched != null) {
+                val trigPrefs = applicationContext.getSharedPreferences(
+                    "notiwizz_last_triggered", android.content.Context.MODE_PRIVATE
+                )
+                val displayName = matched.displayLabel.ifEmpty { matched.identifier }
+                trigPrefs.edit()
+                    .putString("contact_name", displayName)
+                    .putString("sound_name", matched.soundFileName)
+                    .putLong("timestamp", System.currentTimeMillis())
+                    .apply()
                 log("MATCHED: ${matched.identifier} → ${matched.soundFileName}")
                 playCustomSound(matched.soundFileName)
-            } else {
+            }
+            else {
                 log("No match → default sound")
                 playDefaultNotificationSound()
             }
