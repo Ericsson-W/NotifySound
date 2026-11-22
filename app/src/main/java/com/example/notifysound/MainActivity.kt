@@ -303,7 +303,7 @@ fun HomeScreen(
         ) {
             Column {
                 Text(
-                    "NotifySound",
+                    "NotiWizz",
                     style = MaterialTheme.typography.headlineMedium,
                     color = Color.White
                 )
@@ -403,24 +403,7 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(12.dp))
                 }
 
-                // Stats row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    HomeStatCard(
-                        value = "$profileCount",
-                        label = "profiles",
-                        modifier = Modifier.weight(1f)
-                    )
-                    HomeStatCard(
-                        value = "$appsConfigured",
-                        label = "apps active",
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 HomeSectionLabel("Manage")
                 Spacer(modifier = Modifier.height(8.dp))
 

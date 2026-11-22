@@ -21,6 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 class NotificationListener : NotificationListenerService() {
 
@@ -226,26 +227,29 @@ class NotificationListener : NotificationListenerService() {
     }
 
     private fun playDefaultNotificationSound() {
-        if (customSoundPlaying) {
-            Log.d("NotifySound", "Custom sound active — skipping default")
-            return
-        }
-        try {
-            currentPlayer?.let {
-                try { if (it.isPlaying) it.stop(); it.release() } catch (_: Exception) { }
-                currentPlayer = null
+        serviceScope.launch {
+            delay(150)
+            if (customSoundPlaying) {
+                Log.d("NotifySound", "Custom sound active — skipping default")
+                return@launch
             }
-            val defaultUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            val ringtone = RingtoneManager.getRingtone(applicationContext, defaultUri)
-            currentRingtone?.stop()
-            currentRingtone = ringtone
-            ringtone.audioAttributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ALARM)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-            ringtone.play()
-        } catch (e: Exception) {
-            Log.e("NotifySound", "Default sound failed: ${e.message}")
+            try {
+                currentPlayer?.let {
+                    try { if (it.isPlaying) it.stop(); it.release() } catch (_: Exception) { }
+                    currentPlayer = null
+                }
+                val defaultUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                val ringtone = RingtoneManager.getRingtone(applicationContext, defaultUri)
+                currentRingtone?.stop()
+                currentRingtone = ringtone
+                ringtone.audioAttributes = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+                ringtone.play()
+            } catch (e: Exception) {
+                Log.e("NotifySound", "Default sound failed: ${e.message}")
+            }
         }
     }
 
@@ -462,22 +466,13 @@ class NotificationListener : NotificationListenerService() {
     }
 
     private fun autoVerifySetup(sbn: StatusBarNotification) {
-        @Suppress("DEPRECATION")
-        val sound = sbn.notification.sound
-        @Suppress("DEPRECATION")
-        val defaults = sbn.notification.defaults
-        val hasDefaultSound = (defaults and Notification.DEFAULT_SOUND) != 0
-        val isSilent = sound == null && !hasDefaultSound
-
-        if (sbn.packageName == "com.google.android.gm" && isSilent) {
-            val prefs = applicationContext.getSharedPreferences(
-                "notifysound_setup",
-                android.content.Context.MODE_PRIVATE
-            )
-            if (!prefs.getBoolean(sbn.packageName, false)) {
-                prefs.edit().putBoolean(sbn.packageName, true).apply()
-                log("Auto-verified: ${sbn.packageName}")
-            }
+        val prefs = applicationContext.getSharedPreferences(
+            "notifysound_setup",
+            android.content.Context.MODE_PRIVATE
+        )
+        if (!prefs.getBoolean(sbn.packageName, false)) {
+            prefs.edit().putBoolean(sbn.packageName, true).apply()
+            log("Auto-verified: ${sbn.packageName}")
         }
     }
 
